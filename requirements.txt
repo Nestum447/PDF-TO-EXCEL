@@ -5,3 +5,4 @@ img2table
 pandas
 openpyxl
 pdf2image
+numpy
