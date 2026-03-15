@@ -1,153 +1,39 @@
 import streamlit as st
+from img2table.document import Image, PDF
+from img2table.ocr import TesseractOCR
 import tempfile
 import os
-import cv2
-import pytesseract
-import numpy as np
 
-from pdf2image import convert_from_path
-from img2table.document import Image
-from img2table.ocr import TesseractOCR
-
-from openpyxl import Workbook
-
-st.title("PDF / Imagen → Excel")
+st.title("Convertidor de PDF o Imagen a Excel")
 
 archivo = st.file_uploader(
-    "Subir PDF o imagen",
-    type=["pdf","png","jpg","jpeg"]
+    "Sube un PDF o imagen",
+    type=["pdf", "png", "jpg", "jpeg"]
 )
 
-if archivo:
+if archivo is not None:
 
-    extension = os.path.splitext(archivo.name)[1].lower()
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(archivo.read())
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+    ocr = TesseractOCR(lang="eng")
 
-        tmp.write(archivo.read())
-        ruta = tmp.name
+    if archivo.type == "application/pdf":
+        doc = PDF(tmp.name)
+    else:
+        doc = Image(tmp.name)
 
-    paginas = []
+    salida = "resultado.xlsx"
 
-    try:
+    doc.to_xlsx(dest=salida, ocr=ocr)
 
-        if extension == ".pdf":
+    st.success("Excel generado correctamente")
 
-            pdf_pages = convert_from_path(ruta)
+    with open(salida, "rb") as f:
+        st.download_button(
+            "Descargar Excel",
+            f,
+            file_name="resultado.xlsx"
+        )
 
-            for page in pdf_pages:
-
-                img = np.array(page)
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-
-                paginas.append(img)
-
-        else:
-
-            img = cv2.imread(ruta)
-
-            if img is None:
-                st.error("No se pudo leer la imagen")
-                st.stop()
-
-            paginas.append(img)
-
-        wb = Workbook()
-        ws = wb.active
-
-        fila = 1
-
-        ocr = TesseractOCR(lang="eng")
-
-        for pagina in paginas:
-
-            data = pytesseract.image_to_data(
-                pagina,
-                output_type=pytesseract.Output.DICT
-            )
-
-            bloques_texto = []
-
-            for i in range(len(data["text"])):
-
-                texto = data["text"][i].strip()
-
-                if texto != "":
-                    bloques_texto.append({
-                        "text": texto,
-                        "y": data["top"][i]
-                    })
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
-
-                cv2.imwrite(tmp_img.name, pagina)
-
-                doc = Image(tmp_img.name)
-
-                tables = doc.extract_tables(ocr=ocr)
-
-            elementos = []
-
-            for t in bloques_texto:
-
-                elementos.append({
-                    "type": "text",
-                    "y": t["y"],
-                    "content": t["text"]
-                })
-
-            for table in tables:
-
-                elementos.append({
-                    "type": "table",
-                    "y": table.bbox.y1,
-                    "content": table.df
-                })
-
-            elementos.sort(key=lambda x: x["y"])
-
-            for el in elementos:
-
-                if el["type"] == "text":
-
-                    ws.cell(row=fila, column=1).value = el["content"]
-                    fila += 1
-
-                if el["type"] == "table":
-
-                    df = el["content"]
-
-                    for r in df.values:
-
-                        for c, val in enumerate(r):
-
-                            ws.cell(row=fila, column=c+1).value = val
-
-                        fila += 1
-
-                    fila += 1
-
-            fila += 2
-
-        salida = "resultado.xlsx"
-
-        wb.save(salida)
-
-        st.success("Excel generado")
-
-        with open(salida,"rb") as f:
-
-            st.download_button(
-                "Descargar Excel",
-                f,
-                file_name="resultado.xlsx"
-            )
-
-    except Exception as e:
-
-        st.error(str(e))
-
-    finally:
-
-        if os.path.exists(ruta):
-            os.remove(ruta)
+    os.remove(tmp.name)
