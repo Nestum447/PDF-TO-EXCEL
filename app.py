@@ -3,108 +3,131 @@ import tempfile
 import os
 import cv2
 import pytesseract
+import numpy as np
 
+from pdf2image import convert_from_path
 from img2table.document import Image
 from img2table.ocr import TesseractOCR
 
 from openpyxl import Workbook
 
-st.set_page_config(page_title="PDF / Imagen → Excel")
-
-st.title("PDF o Imagen → Excel (manteniendo layout)")
+st.title("PDF / Imagen → Excel")
 
 archivo = st.file_uploader(
-    "Sube PDF o imagen",
-    type=["png","jpg","jpeg","pdf"]
+    "Subir PDF o imagen",
+    type=["pdf","png","jpg","jpeg"]
 )
 
-if archivo is not None:
+if archivo:
 
-    extension = os.path.splitext(archivo.name)[1]
+    extension = os.path.splitext(archivo.name)[1].lower()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
 
         tmp.write(archivo.read())
         ruta = tmp.name
 
-    st.success("Archivo cargado")
+    paginas = []
 
     try:
 
-        img = cv2.imread(ruta)
+        if extension == ".pdf":
 
-        if img is None:
-            st.error("No se pudo leer la imagen")
-            st.stop()
+            pdf_pages = convert_from_path(ruta)
 
-        data = pytesseract.image_to_data(
-            img,
-            output_type=pytesseract.Output.DICT
-        )
+            for page in pdf_pages:
 
-        bloques_texto = []
+                img = np.array(page)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-        for i in range(len(data["text"])):
+                paginas.append(img)
 
-            texto = data["text"][i].strip()
+        else:
 
-            if texto != "":
-                bloques_texto.append({
-                    "text": texto,
-                    "y": data["top"][i]
-                })
+            img = cv2.imread(ruta)
 
-        ocr = TesseractOCR(lang="eng")
+            if img is None:
+                st.error("No se pudo leer la imagen")
+                st.stop()
 
-        doc = Image(ruta)
-
-        tables = doc.extract_tables(ocr=ocr)
-
-        elementos = []
-
-        for t in bloques_texto:
-
-            elementos.append({
-                "type": "text",
-                "y": t["y"],
-                "content": t["text"]
-            })
-
-        for table in tables:
-
-            elementos.append({
-                "type": "table",
-                "y": table.bbox.y1,
-                "content": table.df
-            })
-
-        elementos.sort(key=lambda x: x["y"])
+            paginas.append(img)
 
         wb = Workbook()
         ws = wb.active
 
         fila = 1
 
-        for el in elementos:
+        ocr = TesseractOCR(lang="eng")
 
-            if el["type"] == "text":
+        for pagina in paginas:
 
-                ws.cell(row=fila, column=1).value = el["content"]
-                fila += 1
+            data = pytesseract.image_to_data(
+                pagina,
+                output_type=pytesseract.Output.DICT
+            )
 
-            if el["type"] == "table":
+            bloques_texto = []
 
-                df = el["content"]
+            for i in range(len(data["text"])):
 
-                for r in df.values:
+                texto = data["text"][i].strip()
 
-                    for c, val in enumerate(r):
+                if texto != "":
+                    bloques_texto.append({
+                        "text": texto,
+                        "y": data["top"][i]
+                    })
 
-                        ws.cell(row=fila, column=c+1).value = val
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img:
+
+                cv2.imwrite(tmp_img.name, pagina)
+
+                doc = Image(tmp_img.name)
+
+                tables = doc.extract_tables(ocr=ocr)
+
+            elementos = []
+
+            for t in bloques_texto:
+
+                elementos.append({
+                    "type": "text",
+                    "y": t["y"],
+                    "content": t["text"]
+                })
+
+            for table in tables:
+
+                elementos.append({
+                    "type": "table",
+                    "y": table.bbox.y1,
+                    "content": table.df
+                })
+
+            elementos.sort(key=lambda x: x["y"])
+
+            for el in elementos:
+
+                if el["type"] == "text":
+
+                    ws.cell(row=fila, column=1).value = el["content"]
+                    fila += 1
+
+                if el["type"] == "table":
+
+                    df = el["content"]
+
+                    for r in df.values:
+
+                        for c, val in enumerate(r):
+
+                            ws.cell(row=fila, column=c+1).value = val
+
+                        fila += 1
 
                     fila += 1
 
-                fila += 1
+            fila += 2
 
         salida = "resultado.xlsx"
 
@@ -122,8 +145,7 @@ if archivo is not None:
 
     except Exception as e:
 
-        st.error("Error procesando documento")
-        st.text(str(e))
+        st.error(str(e))
 
     finally:
 
